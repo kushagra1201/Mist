@@ -1,55 +1,66 @@
-import socket, threading
+import socket
+import threading
+import select
+import msgpack
+
 IP = socket.gethostbyname(socket.gethostname())
+PORT = 8000
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-port = 8000
+server_socket.bind((IP, PORT))
+server_socket.listen(10)
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((IP, port))
-server.listen()
+def receive_msg(client_socket):
+    message_type = client_socket.recv(1024).decode('utf-8')
+    if not len(message_type):
+        raise Exception(msg='Client closed the connection')
+    elif message_type not in ('n', 'r'):
+        raise Exception(msg='Invalid message type in header')
+    else:
+        message_len = int(client_socket.recv(1024).decode('utf-8'))
+        return {'type': message_type, 'uname': client_socket.recv(1024)}
 
-clients = []
-nicknames = []
-addresses = []
-
-
-def broadcast(message):
-    for client in clients:
-        client.send(message)
-
-def handle(client):
-    while True:
+def read_handler(notified_socket: socket.socket):
+    global clients
+    global sockets_list
+    if notified_socket == server_socket:
+        client_socket, client_addr = server_socket.accept()
         try:
-            message = client.recv(1024)
-            message_content = message.decode('ascii')
-            if message_content[:4] == 'SEND':
-                print(addresses)
-                client.send(addresses[nicknames.index(message_content[5:])].encode('ascii'))
+            user_data = receive_msg(client_socket)
+            if user_data['type'] == 'n':
+                sockets_list.append(client_socket)
+                clients[user_data['uname']] = client_addr
+                print(f"Accepted new connection from {client_addr[0]}:{client_addr[1]} username: {user_data['uname']}")
             else:
-            # message = nicknames[(clients.index(client))] + ': ' + message_content
-            # message.encode('ascii')
-                broadcast(message)
-        except:
-            index = clients.index(client)
-            clients.remove(client)
-            client.close()
-            nickname = nicknames[index]
-            broadcast('{} left'.format(nickname).encode('ascii'))
-            nicknames.remove(nickname)
-            break
+                print(f"Bad request from {client_addr}")
+        except Exception as e:
+            print(f"Exception: {e.msg}")
+            return
+    else:
+        try:
+            request = receive_msg(notified_socket)
+            if request['type'] == 'r':
+                response_data = clients[request['uname']]
+                notified_socket.send()
+            else:
+                print(f'Bad request from {notified_socket.getpeername()}')
+                return
+        except Exception as e:
+            sockets_list.remove(notified_socket)
+            for uname, addr in clients.items:
+                if addr == notified_socket.getpeername():
+                    del clients[uname]
+                    break
+            print(f"Exception: {e.msg}")
+            return
 
-def receive():
-    while True:
-        client, address = server.accept()
-        print('Connected with {}'.format(str(address)))
-        client.send('NICKNAME'.encode('ascii'))
-        nickname = client.recv(1024).decode('ascii')
-        nicknames.append(nickname)
-        clients.append(client)
-        addresses.append(str(address))
-        print('Nickname is {}'.format(nickname))
-        broadcast('{} joined'.format(nickname).encode('ascii'))
-        client.send('Connected to server'.encode('ascii'))
-        thread = threading.Thread(target=handle, args=(client,))
+while True:
+    read_sockets, write_sockets, exception_sockets = select.select(sockets_list, [], sockets_list) # this refers to the sockets which are readable, writable or have any exceptions 
+    for notified_socket in read_sockets:
+        thread = threading.Thread(target=read_handler, args=(notified_socket,))
         thread.start()
 
-receive()
+    for notified_socket in exception_sockets:
+        sockets_list.remove(notified_socket)
+        del clients[notified_socket]
