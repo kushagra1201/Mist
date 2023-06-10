@@ -8,8 +8,7 @@ PORT = 8000
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-server_socket.bind((IP, PORT))
-server_socket.listen(10)
+sockets_list = [server_socket]
 
 def receive_msg(client_socket):
     message_type = client_socket.recv(1024).decode('utf-8')
@@ -41,8 +40,13 @@ def read_handler(notified_socket: socket.socket):
         try:
             request = receive_msg(notified_socket)
             if request['type'] == 'r':
-                response_data = clients[request['uname']]
-                notified_socket.send()
+                response_data = clients.get(request['uname'])
+                if response_data is not None:
+                    data: bytes = msgpack.packb(response_data)
+                    notified_socket.send(data)
+                else:
+                    print('Username {request['uname']} not found')
+                    return
             else:
                 print(f'Bad request from {notified_socket.getpeername()}')
                 return
@@ -56,6 +60,9 @@ def read_handler(notified_socket: socket.socket):
             return
 
 while True:
+    read_sockets: list[socket.socket]
+    exception_sockets: list[socket.socket]
+
     read_sockets, write_sockets, exception_sockets = select.select(sockets_list, [], sockets_list) # this refers to the sockets which are readable, writable or have any exceptions 
     for notified_socket in read_sockets:
         thread = threading.Thread(target=read_handler, args=(notified_socket,))
